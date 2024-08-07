@@ -26,7 +26,6 @@ __all__ = (
 
 import lsst.geom as geom
 import lsst.meas.base as measBase
-import numpy as np
 from anacal.fpfs import FpfsMeasure
 from lsst.pex.config import Field, FieldValidationError, ListField
 
@@ -42,15 +41,21 @@ class AnaCalFpfsConfig(measBase.SingleFramePluginConfig):
         doc="Shapelet's Gaussian kernel size",
         default=0.52,
     )
-
+    pixel_scale = Field[float](
+        doc="pixel scale of image",
+        default=0.2,
+    )
+    mag_zero = Field[float](
+        doc="magnitude zero point of the image",
+        default=30.0,
+    )
     badMaskPlanes = ListField[str](
         doc="Mask planes used to reject bad pixels.",
         default=["BAD", "SAT"],
     )
-
     measureFromNoise = Field[bool](
         doc="Measure from pure noise for noise bias correction?",
-        default=False,
+        default=False,  # TODO: should be True
     )
 
     def validate(self):
@@ -61,6 +66,7 @@ class AnaCalFpfsConfig(measBase.SingleFramePluginConfig):
         super().validate()
 
 
+@measBase.register("ext_shapeAnaCal_Fpfs")
 class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
     """Base plugin for higher moments measurement"""
 
@@ -78,21 +84,17 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
 
         # Embed the flag definitions in the schema using a flag handler.
         self.flagHandler = measBase.FlagHandler.addFields(schema, name, flagDefs)
-        # TODO: I should be able to get these two values from somewhere..
-        pixel_scale = 0.2
-        mag_zero = 30.0
         self.fpfs_task = FpfsMeasure(
             kmax=3.05,  # TODO: Use PSF image to determine a truncation scale
-            pixel_scale=pixel_scale,
+            mag_zero=self.config.mag_zero,
+            pixel_scale=self.config.pixel_scale,
             sigma_arcsec=self.config.sigma_arcsec,
-            klim_thres=self.config.klim_thres,
             nord=self.config.n_order,
             det_nrot=-1,
-            mag_zero=mag_zero,
         )
 
         # TODO: Understand where is name defined
-        for suffix in self.fpfs_task.colnames():
+        for suffix in self.fpfs_task.colnames:
             schema.addField(
                 schema.join(name, f"source_{suffix}"),
                 type=float,
@@ -100,7 +102,7 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
             )
 
         if self.config.measureFromNoise:
-            for suffix in self.fpfs_task.colnames():
+            for suffix in self.fpfs_task.colnames:
                 schema.addField(
                     schema.join(name, f"noise_{suffix}"),
                     type=float,
@@ -128,9 +130,10 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
             y_center=y_center,
         )
 
-        bitValue = exposure.mask.getPlaneBitMask(self.config.badMaskPlanes)
         # TODO: need to include mask_array in the future
-        mask_array = ((exposure.mask.array & bitValue) != 0).astype(int)
+        # bitValue = exposure.mask.getPlaneBitMask(self.config.badMaskPlanes)
+        # but probably in the detection part
+        # mask_array = ((exposure.mask.array & bitValue) != 0).astype(int)
         psf_array = exposure.getPsf().computeImage(geom.Point2D(x_center, y_center)).array
         psf_array = resize_array(psf_array)
         gal_array = exposure.image.array
