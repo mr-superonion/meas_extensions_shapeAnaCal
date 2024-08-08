@@ -29,6 +29,7 @@ on experimentation with the specific datasets used here.
 import unittest
 
 import lsst.afw.geom
+import lsst.afw.table as afwTable
 import lsst.meas.base.tests
 import lsst.meas.extensions.shapeAnaCal  # noqa: F401
 import lsst.utils.tests as tests
@@ -55,22 +56,20 @@ class FpfsBaseTestCase(tests.TestCase):
         # Create a minimal schema (columns)
         self.schema = lsst.meas.base.tests.TestDataset.makeMinimalSchema()
 
+        self.peakCenter = afwTable.Point2IKey.addFields(
+            self.schema,
+            name="anacal_peak_center",
+            doc="Center used to apply constraints in scarlet",
+            unit="pixel",
+        )
+
         # Create a task
         sfmTask = SingleFrameMeasurementTask(config=sfmConfig, schema=self.schema)
 
-        dataset = self.create_dataset()
-
-        # Get the exposure and catalog.
-        exposure, catalog = dataset.realize(0.0, sfmTask.schema, randomSeed=0)
-
-        self.catalog = catalog
-        self.exposure = exposure
+        self.create_dataset(sfmTask.schema)
         self.task = sfmTask
 
-        self.add_mask_bits()
-
-    @staticmethod
-    def add_mask_bits():
+    def add_mask_bits(self):
         """Add mask bits to the exposure.
 
         This must go along with the create_dataset method. This is a no-op for
@@ -78,29 +77,29 @@ class FpfsBaseTestCase(tests.TestCase):
         """
         pass
 
-    @staticmethod
-    def create_dataset():
+    def create_dataset(self, schema):
         # Create a simple, fake dataset
         bbox = lsst.geom.Box2I(lsst.geom.Point2I(0, 0), lsst.geom.Extent2I(100, 100))
         dataset = lsst.meas.base.tests.TestDataset(bbox)
-        # Create a point source with Gaussian PSF
-        dataset.addSource(100000.0, lsst.geom.Point2D(49.5, 49.5))
-
         # Create a galaxy with Gaussian PSF
         dataset.addSource(
             300000.0,
-            lsst.geom.Point2D(76.3, 79.2),
-            lsst.afw.geom.Quadrupole(2.0, 3.0, 0.5),
+            lsst.geom.Point2D(50, 50),
+            lsst.afw.geom.Quadrupole(ixx=2.0, iyy=2.0, ixy=0.5),
         )
+        # Get the exposure and catalog.
+        exposure, catalog = dataset.realize(0.0, schema, randomSeed=0)
+        catalog[0].set("anacal_peak_center_x", 50)
+        catalog[0].set("anacal_peak_center_y", 50)
+
+        self.exposure = exposure
+        self.catalog = catalog
+        self.add_mask_bits()
         return dataset
 
     def run_measurement(self, **kwargs):
         """Run measurement on the source and the PSF"""
         self.task.run(self.catalog, self.exposure, **kwargs)
-
-    def check(self, row, plugin_name, atol):
-        M_source_40 = row[f"{plugin_name}_40"]
-        self.assertFloatsAlmostEqual(M_source_40, 0.75, atol=atol)
 
     @lsst.utils.tests.methodParameters(plugin_name=("ext_shapeAnaCal_Fpfs",))
     def test_validate_config(self, plugin_name):
@@ -108,16 +107,29 @@ class FpfsBaseTestCase(tests.TestCase):
         config = self.task.config.plugins[plugin_name]
         config.validate()  # This should not raise any error.
 
-        # Test that the validation fails when the max_order is smaller than the
-        # min_order.
-        config.n_order = 9
+        # Test that the validation fails when the n_order is not 4 or 6
+        config.n_order = 7
+        with self.assertRaises(FieldValidationError):
+            config.validate()
+
+        config.n_order = 3
         with self.assertRaises(FieldValidationError):
             config.validate()
 
     @lsst.utils.tests.methodParameters(plugin_name=("ext_shapeAnaCal_Fpfs",))
     def test_fpfs_shear_estimate(self, plugin_name):
         """Test shear estimation"""
-        self.assertFloatsAlmostEqual(1, 1, atol=1e-7)
+        self.run_measurement()
+        row = self.catalog[0]
+        m22c = row[f"{plugin_name}_source_m22c"]
+        m22s = row[f"{plugin_name}_source_m22s"]
+        m00 = row[f"{plugin_name}_source_m00"]
+        m40 = row[f"{plugin_name}_source_m40"]
+
+        g1_estimate = m22c / (m00 - m40)
+        g2_estimate = m22s / (m00 - m40)
+        assert g2_estimate > 0.0
+        self.assertFloatsAlmostEqual(g1_estimate, 0.0, atol=1e-7)
 
 
 class TestMemory(lsst.utils.tests.MemoryTestCase):

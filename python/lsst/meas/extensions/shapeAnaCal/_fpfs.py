@@ -105,7 +105,7 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
             for suffix in self.fpfs_task.colnames:
                 schema.addField(
                     schema.join(name, f"noise_{suffix}"),
-                    type=float,
+                    type=float,  # TODO: We are not using double precision?
                     doc=f"AnaCal FPFS noise {suffix} for source",
                 )
 
@@ -121,10 +121,17 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
     def measure(self, record, exposure):
         # Docstring inherited.
 
+        # If the PSF model is not available, this plugin would fail for all
+        # entries.
+        if exposure.getPsf() is None:
+            raise measBase.FatalAlgorithmError("No PSF attached to the exposure.")
+
         # TODO: need to create detection task for anacal and use that peak
         # positions
-        x_center = (record["deblend_peak_center_x"],)
-        y_center = (record["deblend_peak_center_y"],)
+        # x_center = record["deblend_peak_center_x"]
+        # y_center = record["deblend_peak_center_y"]
+        x_center = record["anacal_peak_center_x"]
+        y_center = record["anacal_peak_center_y"]
         coords = make_anacal_peaks(
             x_center=x_center,
             y_center=y_center,
@@ -140,8 +147,9 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
 
         # measurement from double noised image (src)
         # and pure noise image (nrc)
-        src, nrc = self.fpfs_task.run(
+        src, nrc = self.fpfs_task.run_single_psf(
             gal_array=gal_array,
+            psf_array=psf_array,
             det=coords,
             noise_array=None,  # TODO: set to None now, but need to be added
         )
@@ -149,11 +157,12 @@ class AnaCalFpfsPlugin(measBase.SingleFramePlugin):
         # Record the moments
         for cname in self.fpfs_task.colnames:
             index = self.fpfs_task.di[cname]
-            column_key = self.name + f"source_{cname}"
+            column_key = self.name + f"_source_{cname}"
+            print(column_key)
             record.set(column_key, src[0][index])
 
         if nrc is not None:
             for cname in self.fpfs_task.colnames:
                 index = self.fpfs_task.di[cname]
-                column_key = self.name + f"noise_{cname}"
-                record.set(column_key, src[0][index])
+                column_key = self.name + f"_noise_{cname}"
+                record.set(column_key, nrc[0][index])

@@ -11,3 +11,4 @@ config.plugins.names |= [
     "ext_shapeAnaCal_Fpfs",
 ]
 config.slots.shape = "ext_shapeAnaCal_Fpfs"
+# what those slots center, slot psfflux mean?
